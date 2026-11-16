@@ -1,0 +1,1155 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>CloudSim + SFLA | Simulasi Penjadwalan Cloud</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%2303132b'/%3E%3Ccircle cx='32' cy='32' r='21' fill='none' stroke='%2312b0a2' stroke-width='6' stroke-dasharray='8 5'/%3E%3Ccircle cx='32' cy='32' r='11' fill='%23fdbb16'/%3E%3C/svg%3E"/>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap');
+:root{
+  --night:#03132b;--navy:#0b1b34;--deep:#071f42;
+  --blue:#127bbe;--cover:#243f81;
+  --gold:#fdbb16;--tosca:#12b0a2;--tosca-light:#5fe0d2;
+  --sky:#26aee4;--sky-light:#9fdcf7;--coral:#f47d52;--danger:#ff5757;
+  --ink:#f2f7ff;--muted:#a9bbd6;--line:rgba(242,247,255,.16);
+  --accent:var(--tosca-light);--bar-h:64px;
+  --ff:'Inter',system-ui,sans-serif;--mono:'JetBrains Mono',monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;overflow:hidden;background:#010916;color:var(--ink);font-family:var(--ff)}
+button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
+canvas{display:block}
+.hidden{display:none!important}
+
+.deck{position:absolute;top:50%;left:50%;width:1920px;height:1080px;overflow:hidden;background:var(--night);transform:translate(-50%,-50%);transform-origin:center}
+
+.slide{position:absolute;inset:0;overflow:hidden;background:var(--night)}
+.entering-fwd{animation:sIn .52s cubic-bezier(.22,1,.36,1) both}
+.entering-bwd{animation:sInB .52s cubic-bezier(.22,1,.36,1) both}
+.leaving{z-index:-1;pointer-events:none}
+.leaving-fwd{animation:sOut .42s ease both}
+.leaving-bwd{animation:sOutB .42s ease both}
+@keyframes sIn{from{opacity:0;transform:translateX(70px)}to{opacity:1;transform:none}}
+@keyframes sInB{from{opacity:0;transform:translateX(-70px)}to{opacity:1;transform:none}}
+@keyframes sOut{to{opacity:0;transform:translateX(-70px)}}
+@keyframes sOutB{to{opacity:0;transform:translateX(70px)}}
+
+.chapter-wipe{position:absolute;inset:0;z-index:20;display:flex;align-items:center;justify-content:center;background:var(--accent);color:var(--night);font-size:120px;font-weight:900;letter-spacing:-.02em;pointer-events:none;clip-path:circle(0% at 50% 50%);visibility:hidden}
+.chapter-wipe.play{visibility:visible;animation:cwipe 1050ms cubic-bezier(.65,0,.35,1) both}
+@keyframes cwipe{0%{clip-path:circle(0% at 50% 50%);opacity:1}42%{clip-path:circle(75% at 50% 50%);opacity:1}68%{clip-path:circle(75% at 50% 50%);opacity:1}100%{clip-path:circle(75% at 50% 50%);opacity:0}}
+
+.scene-canvas{position:absolute;inset:0;width:100%;height:100%}
+
+.deck-bar{position:absolute;right:0;bottom:0;left:0;z-index:10;display:flex;align-items:center;gap:8px;height:var(--bar-h);padding:0 14px;background:rgba(1,9,22,.86)}
+.bar-btn{display:inline-flex;flex:none;align-items:center;justify-content:center;min-width:50px;height:46px;padding:0 12px;border-radius:10px;color:var(--muted);font-size:23px;font-weight:700}
+.bar-btn:hover{background:rgba(242,247,255,.12);color:var(--ink)}
+.bar-btn svg{width:24px;height:24px;stroke:currentColor;fill:none;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+.bar-btn-next{background:rgba(242,247,255,.1);color:var(--ink)}
+.deck-rail{display:flex;flex:1;gap:6px;padding:0 8px;align-items:center}
+.rail-dot{width:10px;height:10px;border-radius:50%;background:rgba(242,247,255,.2);border:0;padding:0;transition:all .3s}
+.rail-dot.active{background:var(--accent);transform:scale(1.4)}
+.rail-dot.visited{background:rgba(95,224,210,.4)}
+.deck-counter{flex:none;min-width:96px;color:var(--muted);font-family:var(--mono);font-size:22px;text-align:right}
+
+kbd{display:inline-block;padding:1px 8px;border:1.5px solid currentColor;border-radius:7px;font-family:var(--mono);font-size:.8em;font-weight:700;opacity:.8}
+</style>
+</head>
+<body>
+<div class="deck" id="deck">
+  <main id="stage"></main>
+  <div id="chapter-wipe" class="chapter-wipe"></div>
+  <footer class="deck-bar">
+    <button class="bar-btn" id="btn-prev"><svg viewBox="0 0 24 24"><polyline points="15 5 8 12 15 19"/></svg></button>
+    <nav class="deck-rail" id="rail"></nav>
+    <span class="deck-counter" id="counter"></span>
+    <button class="bar-btn bar-btn-next" id="btn-next"><svg viewBox="0 0 24 24"><polyline points="9 5 16 12 9 19"/></svg></button>
+  </footer>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+// Rendering helpers
+// ═══════════════════════════════════════════════════════════════
+const C={night:'#03132b',navy:'#0b1b34',deep:'#071f42',blue:'#127bbe',gold:'#fdbb16',
+  tosca:'#12b0a2',toscaL:'#5fe0d2',sky:'#26aee4',skyL:'#9fdcf7',coral:'#f47d52',danger:'#ff5757',
+  ink:'#f2f7ff',muted:'#a9bbd6',line:'rgba(242,247,255,.16)'};
+const VM_C=['#7fd0ff','#5fe0d2','#ffc66b','#f9a071'];
+const VM_MIPS=[850,1150,1450,1750];
+const lerp=(a,b,t)=>a+(b-a)*t;
+const clamp=(v,lo,hi)=>Math.max(lo,Math.min(hi,v));
+const easeOut=t=>1-Math.pow(1-t,3);
+const easeInOut=t=>t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2;
+const seg=(time,start,dur,fn)=>{const t=clamp((time-start)/dur,0,1);return fn?fn(t):t};
+
+function fillBg(ctx,w,h,colors){
+  const g=ctx.createLinearGradient(0,0,0,h);
+  g.addColorStop(0,colors[0]);g.addColorStop(.5,colors[1]||colors[0]);g.addColorStop(1,colors[2]||colors[0]);
+  ctx.fillStyle=g;ctx.fillRect(0,0,w,h);
+}
+
+function txt(ctx,text,x,y,opts={}){
+  const{size=30,weight=700,mono=false,align='left',color=C.ink,alpha=1,baseline='middle'}=opts;
+  ctx.save();ctx.globalAlpha=alpha;
+  ctx.font=`${weight} ${size}px ${mono?"'JetBrains Mono',monospace":"'Inter',sans-serif"}`;
+  ctx.textAlign=align;ctx.textBaseline=baseline;ctx.fillStyle=color;
+  ctx.fillText(text,x,y);ctx.restore();
+}
+
+function pill(ctx,text,x,y,opts={}){
+  const{size=28,fill=C.toscaL,alpha=1,weight=800}=opts;
+  ctx.save();ctx.globalAlpha=alpha;
+  ctx.font=`${weight} ${size}px 'JetBrains Mono',monospace`;
+  const w=ctx.measureText(text).width+36;
+  ctx.beginPath();ctx.roundRect(x-w/2,y-size*.7,w,size*1.4,size*.7);
+  ctx.fillStyle=fill;ctx.fill();
+  ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillStyle=C.night;
+  ctx.fillText(text,x,y);ctx.restore();
+}
+
+function drawFrog(ctx,x,y,r,color,lift=0){
+  ctx.save();ctx.translate(x,y-lift);
+  ctx.beginPath();ctx.ellipse(0,0,r,r*.75,0,0,Math.PI*2);
+  ctx.fillStyle=color;ctx.fill();
+  ctx.fillStyle=C.night;
+  ctx.beginPath();ctx.arc(-r*.35,-r*.35,r*.18,0,Math.PI*2);ctx.fill();
+  ctx.beginPath();ctx.arc(r*.35,-r*.35,r*.18,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#fff';
+  ctx.beginPath();ctx.arc(-r*.32,-r*.38,r*.08,0,Math.PI*2);ctx.fill();
+  ctx.beginPath();ctx.arc(r*.38,-r*.38,r*.08,0,Math.PI*2);ctx.fill();
+  ctx.beginPath();ctx.ellipse(0,r*.55,r*.6,r*.12,0,0,Math.PI*2);
+  ctx.fillStyle='rgba(0,0,0,.2)';ctx.fill();
+  ctx.restore();
+}
+
+function glow(ctx,x,y,r,color,alpha=.5){
+  ctx.save();ctx.globalAlpha=alpha;
+  const g=ctx.createRadialGradient(x,y,0,x,y,r);
+  g.addColorStop(0,color);g.addColorStop(1,'transparent');
+  ctx.fillStyle=g;ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill();ctx.restore();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Slide definitions
+// ═══════════════════════════════════════════════════════════════
+const SLIDES=[];
+function defSlide(id,chapter,draw){SLIDES.push({id,chapter,draw})}
+
+// ─── Slide 0: Title ──────────────────────────────────
+defSlide('title','Pembuka',(ctx,{t,w,h})=>{
+  fillBg(ctx,w,h,['#03132b','#0a1e3d','#03132b']);
+
+  if(!ctx._particles){
+    ctx._particles=[];
+    for(let i=0;i<100;i++)ctx._particles.push({
+      x:Math.random()*w,y:Math.random()*h,
+      vx:(Math.random()-.5)*.5,vy:(Math.random()-.5)*.4,
+      r:Math.random()*3+1,a:Math.random()*.5+.15
+    });
+  }
+  const P=ctx._particles;
+  P.forEach(p=>{
+    p.x+=p.vx;p.y+=p.vy;
+    if(p.x<0)p.x=w;if(p.x>w)p.x=0;if(p.y<0)p.y=h;if(p.y>h)p.y=0;
+    ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,Math.PI*2);
+    ctx.fillStyle=`rgba(95,224,210,${p.a})`;ctx.fill();
+  });
+  for(let i=0;i<P.length;i++){
+    for(let j=i+1;j<P.length;j++){
+      const dx=P[i].x-P[j].x,dy=P[i].y-P[j].y,d=Math.hypot(dx,dy);
+      if(d<140){ctx.beginPath();ctx.moveTo(P[i].x,P[i].y);ctx.lineTo(P[j].x,P[j].y);
+      ctx.strokeStyle=`rgba(95,224,210,${.12*(1-d/140)})`;ctx.lineWidth=1;ctx.stroke()}
+    }
+  }
+
+  glow(ctx,300,250,280,'rgba(18,176,162,.08)');
+  glow(ctx,1600,800,350,'rgba(18,123,190,.06)');
+
+  const a1=seg(t,0,.6,easeOut),a2=seg(t,.15,.6,easeOut),a3=seg(t,.3,.6,easeOut),a4=seg(t,.5,.6,easeOut);
+  txt(ctx,'Soft Computing — Implementasi CloudSim',64,340,{size:32,weight:700,color:C.toscaL,alpha:a1});
+  txt(ctx,'CloudSim + SFLA',64,340+90*a2,{size:150,weight:900,alpha:a2});
+  txt(ctx,'Simulasi Penjadwalan Tugas Cloud Computing',64,340+90+80*a3,{size:40,weight:500,color:C.muted,alpha:a3});
+  txt(ctx,'dengan Shuffled Frog-Leaping Algorithm',64,340+90+80+50*a3,{size:40,weight:500,color:C.muted,alpha:a3});
+
+  const by=640;
+  if(a4>0){
+    ctx.save();ctx.globalAlpha=a4;
+    const badges=['CloudSim 7.0.1','Java 21','Maven','SFLA Metaheuristic'];
+    let bx=64;
+    badges.forEach(b=>{
+      ctx.font="bold 24px 'JetBrains Mono',monospace";
+      const bw=ctx.measureText(b).width+32;
+      ctx.beginPath();ctx.roundRect(bx,by,bw,48,12);
+      ctx.fillStyle='rgba(242,247,255,.07)';ctx.fill();
+      ctx.strokeStyle=C.line;ctx.lineWidth=1.5;ctx.stroke();
+      txt(ctx,b,bx+16,by+24,{size:22,weight:600,mono:true,color:C.muted,alpha:1});
+      bx+=bw+14;
+    });
+    ctx.restore();
+  }
+
+  const lift=Math.abs(Math.sin(t*2.5))*20;
+  drawFrog(ctx,1680,500,52,C.toscaL,lift);
+});
+
+// ─── Slide 1: Masalah ─────────────────────────────────
+defSlide('masalah','Pembuka',(ctx,{t,w,h})=>{
+  fillBg(ctx,w,h,['#03132b','#081d3a','#03132b']);
+
+  const a0=seg(t,0,.5,easeOut);
+  txt(ctx,'Latar Belakang',64,60,{size:30,weight:700,color:C.toscaL,alpha:a0});
+  txt(ctx,'Mengapa Task Scheduling?',64,130,{size:76,weight:900,alpha:a0});
+  txt(ctx,'Bagaimana memetakan n tugas ke m VM agar waktu total (makespan) minimal?',64,220,{size:34,weight:500,color:C.muted,alpha:a0});
+
+  const cards=[
+    {icon:'MS',title:'Makespan Tinggi',desc:'VM lambat menjadi bottleneck\njika beban tidak diperhitungkan',color:C.gold},
+    {icon:'LB',title:'Beban Tidak Seimbang',desc:'Beberapa VM kelebihan beban\nyang lain menganggur',color:C.coral},
+    {icon:'TP',title:'Throughput Rendah',desc:'Jumlah tugas selesai\nper detik menjadi sedikit',color:C.toscaL},
+    {icon:'NP',title:'NP-Hard Problem',desc:'Solusi eksak tidak praktis\nperlu metaheuristik',color:C.sky}
+  ];
+  cards.forEach((c,i)=>{
+    const a=seg(t,.3+i*.15,.6,easeOut);
+    const cx=64+i*450,cy=310;
+    ctx.save();ctx.globalAlpha=a;ctx.translate(0,(1-a)*30);
+
+    ctx.beginPath();ctx.roundRect(cx,cy,420,350,22);
+    ctx.fillStyle='rgba(242,247,255,.04)';ctx.fill();
+    ctx.strokeStyle=C.line;ctx.lineWidth=1.5;ctx.stroke();
+
+    const pulse=.8+Math.sin(t*3+i)*.2;
+    glow(ctx,cx+60,cy+60,50,c.color+'30',pulse);
+    ctx.beginPath();ctx.arc(cx+60,cy+60,32,0,Math.PI*2);
+    ctx.fillStyle=c.color+'25';ctx.fill();
+    txt(ctx,c.icon,cx+60,cy+60,{size:24,weight:900,align:'center',color:c.color});
+
+    txt(ctx,c.title,cx+30,cy+130,{size:28,weight:800,color:c.color});
+    c.desc.split('\n').forEach((l,li)=>{
+      txt(ctx,l,cx+30,cy+175+li*32,{size:20,weight:500,color:C.muted});
+    });
+
+    const lineW=a*360;
+    ctx.beginPath();ctx.moveTo(cx+30,cy+250);ctx.lineTo(cx+30+lineW,cy+250);
+    ctx.strokeStyle=c.color+'40';ctx.lineWidth=2;ctx.stroke();
+
+    ctx.restore();
+  });
+
+  const eq=seg(t,1.2,.6,easeOut);
+  if(eq>0){
+    ctx.save();ctx.globalAlpha=eq*.6;
+    txt(ctx,'minimize  max(finish_time(VM_i))  ,  i = 1..m',960,780,{size:28,mono:true,align:'center',color:C.gold});
+    ctx.restore();
+  }
+});
+
+// ─── Slide 2: Architecture ────────────────────────────
+defSlide('arsitektur','Arsitektur',(ctx,{t,w,h})=>{
+  fillBg(ctx,w,h,['#03132b','#07244a','#03132b']);
+
+  const a0=seg(t,0,.5,easeOut);
+  txt(ctx,'Arsitektur Simulasi',64,55,{size:28,weight:700,color:C.toscaL,alpha:a0});
+  txt(ctx,'Infrastruktur CloudSim',64,120,{size:68,weight:900,alpha:a0});
+
+  const dcA=seg(t,.2,.8,easeOut);
+  ctx.save();ctx.globalAlpha=dcA;
+  ctx.beginPath();ctx.roundRect(60,180,1800,820,24);
+  ctx.fillStyle='rgba(242,247,255,.02)';ctx.fill();
+  ctx.strokeStyle=C.blue+'60';ctx.lineWidth=2;ctx.stroke();
+  glow(ctx,960,200,300,'rgba(18,123,190,.06)');
+  txt(ctx,'DATACENTER',90,210,{size:22,weight:800,color:C.blue});
+  txt(ctx,'VMM: Xen  ·  TimeZone: 7.0  ·  Cost: $3.0/s',350,210,{size:18,weight:500,color:C.muted});
+  ctx.restore();
+
+  const hosts=[{x:80,label:'HOST 0'},{x:970,label:'HOST 1'}];
+  hosts.forEach((ho,hi)=>{
+    const ha=seg(t,.4+hi*.15,.7,easeOut);
+    ctx.save();ctx.globalAlpha=ha;
+    ctx.beginPath();ctx.roundRect(ho.x,250,860,230,18);
+    ctx.fillStyle='rgba(242,247,255,.04)';ctx.fill();
+    ctx.strokeStyle='rgba(242,247,255,.12)';ctx.lineWidth=1.5;ctx.stroke();
+    txt(ctx,ho.label,ho.x+24,278,{size:20,weight:800,color:C.muted});
+    txt(ctx,'4 PE x 2000 MIPS  ·  8192 MB RAM',ho.x+130,278,{size:16,weight:500,color:C.muted});
+    ctx.restore();
+
+    const vms=hi===0?[0,2]:[1,3];
+    vms.forEach((vi,j)=>{
+      const va=seg(t,.6+vi*.12,.6,easeOut);
+      const vx=ho.x+20+j*420,vy=310,vw=400,vh=150;
+      const pulse=.85+Math.sin(t*2.5+vi)*.15;
+
+      ctx.save();ctx.globalAlpha=va;
+      glow(ctx,vx+vw/2,vy+vh/2,120,VM_C[vi]+'15',pulse);
+      ctx.beginPath();ctx.roundRect(vx,vy,vw,vh,16);
+      ctx.fillStyle=VM_C[vi]+'12';ctx.fill();
+      ctx.strokeStyle=VM_C[vi];ctx.lineWidth=2*pulse;ctx.stroke();
+
+      txt(ctx,`VM-${vi}`,vx+20,vy+30,{size:26,weight:800,color:VM_C[vi]});
+      txt(ctx,['Small','Medium','Large','X-Large'][vi],vx+100,vy+30,{size:18,weight:600,color:VM_C[vi]+'aa'});
+      txt(ctx,`${VM_MIPS[vi]}`,vx+20,vy+80,{size:52,weight:800,mono:true,color:VM_C[vi]});
+      txt(ctx,'MIPS',vx+20,vy+118,{size:18,weight:600,color:C.muted});
+      txt(ctx,'1 PE  ·  512 MB  ·  1 Gbps',vx+200,vy+100,{size:16,weight:500,color:C.muted});
+      ctx.restore();
+    });
+  });
+
+  const ba=seg(t,.9,.6,easeOut);
+  ctx.save();ctx.globalAlpha=ba;
+  const brY=510;
+  const brG=ctx.createLinearGradient(80,brY,1860,brY);
+  brG.addColorStop(0,C.toscaL+'22');brG.addColorStop(1,C.toscaL+'05');
+  ctx.beginPath();ctx.roundRect(80,brY,1780,70,14);
+  ctx.fillStyle=brG;ctx.fill();
+  ctx.strokeStyle=C.toscaL;ctx.lineWidth=2;ctx.stroke();
+  txt(ctx,'SFLA DATACENTER BROKER',110,brY+35,{size:22,weight:800,color:C.toscaL});
+  txt(ctx,'Override submitCloudlets() → Optimasi SFLA sebelum submit ke VM',490,brY+35,{size:20,weight:500,color:C.muted});
+  ctx.restore();
+
+  const arrowA=seg(t,1,.4,easeOut);
+  if(arrowA>0){
+    ctx.save();ctx.globalAlpha=arrowA;
+    ctx.setLineDash([10,8]);ctx.strokeStyle=C.toscaL+'50';ctx.lineWidth=2;
+    [440,1400].forEach(ax=>{
+      ctx.beginPath();ctx.moveTo(ax,brY);ctx.lineTo(ax,480);ctx.stroke();
+      const dotY=brY-(brY-480)*((t*1.5)%1);
+      ctx.beginPath();ctx.arc(ax,dotY,4,0,Math.PI*2);ctx.fillStyle=C.toscaL;ctx.fill();
+    });
+    ctx.setLineDash([]);ctx.restore();
+  }
+
+  const cla=seg(t,1.1,.7,easeOut);
+  ctx.save();ctx.globalAlpha=cla;
+  ctx.beginPath();ctx.roundRect(80,610,1780,370,18);
+  ctx.fillStyle='rgba(253,187,22,.03)';ctx.fill();
+  ctx.strokeStyle=C.gold+'40';ctx.lineWidth=1.5;ctx.stroke();
+  txt(ctx,'16 CLOUDLETS',110,644,{size:22,weight:800,color:C.gold});
+  txt(ctx,'Beban: 1400 - 6210 MI  ·  1 PE per cloudlet  ·  Seed: 2026',310,644,{size:18,weight:500,color:C.muted});
+
+  const clMI=[2439,5770,6007,3790,4489,3838,5293,3156,3914,2828,4159,3469,6071,3130,1634,3874];
+  for(let i=0;i<16;i++){
+    const col=i%8,row=Math.floor(i/8);
+    const cx=130+col*216,cy=690+row*120;
+    const ca=seg(t,1.3+i*.06,.4,easeOut);
+    const pulse=.7+Math.sin(t*3+i*.5)*.3;
+    ctx.save();ctx.globalAlpha=ca;
+    ctx.beginPath();ctx.roundRect(cx,cy,196,96,14);
+    ctx.fillStyle=C.gold+'10';ctx.fill();
+    ctx.strokeStyle=C.gold+Math.round(pulse*40).toString(16).padStart(2,'0');ctx.lineWidth=1.5;ctx.stroke();
+    txt(ctx,`T${i}`,cx+14,cy+28,{size:18,weight:800,mono:true,color:C.gold,alpha:1});
+    txt(ctx,`${clMI[i]} MI`,cx+14,cy+60,{size:22,weight:700,mono:true,color:C.ink,alpha:1});
+    ctx.restore();
+  }
+  ctx.restore();
+
+  if(arrowA>0){
+    ctx.save();ctx.globalAlpha=arrowA;
+    ctx.setLineDash([10,8]);ctx.strokeStyle=C.gold+'40';ctx.lineWidth=2;
+    [440,960,1400].forEach(ax=>{
+      ctx.beginPath();ctx.moveTo(ax,580);ctx.lineTo(ax,610);ctx.stroke();
+      const dotY=580+(610-580)*((t*2)%1);
+      ctx.beginPath();ctx.arc(ax,dotY,3,0,Math.PI*2);ctx.fillStyle=C.gold;ctx.fill();
+    });
+    ctx.setLineDash([]);ctx.restore();
+  }
+});
+
+// ─── Slide 3: SFLA Algoritma ─────────────────────────
+defSlide('sfla-algo','SFLA',(ctx,{t,w,h})=>{
+  fillBg(ctx,w,h,['#03132b','#091e3c','#03132b']);
+
+  const a0=seg(t,0,.5,easeOut);
+  txt(ctx,'Algoritma',64,55,{size:28,weight:700,color:C.toscaL,alpha:a0});
+  txt(ctx,'Shuffled Frog-Leaping Algorithm',64,130,{size:64,weight:900,alpha:a0});
+  txt(ctx,'Terinspirasi perilaku katak yang mencari makanan secara berkelompok',64,200,{size:30,weight:500,color:C.muted,alpha:a0});
+
+  const steps=[
+    {n:'1',title:'Inisialisasi',desc:'Bangkitkan 30 katak (solusi)\nsecara acak dalam [0, 4)',color:C.toscaL},
+    {n:'2',title:'Sort & Partisi',desc:'Urutkan berdasarkan fitness\nBagi ke 5 memeplex (round-robin)',color:C.skyL},
+    {n:'3',title:'Evolusi Lokal',desc:'Katak terburuk lompat ke\nXb, Xg, atau Random (5x/grup)',color:C.gold},
+    {n:'4',title:'Shuffle & Ulangi',desc:'Gabung semua katak\nAcak ulang, 50 iterasi',color:C.coral}
+  ];
+  const sW=400,sH=280,sGap=30,sX0=(w-steps.length*sW-(steps.length-1)*sGap)/2;
+  steps.forEach((s,i)=>{
+    const a=seg(t,.4+i*.2,.7,easeOut);
+    const sx=sX0+i*(sW+sGap),sy=280;
+    ctx.save();ctx.globalAlpha=a;ctx.translate(0,(1-a)*40);
+
+    ctx.beginPath();ctx.roundRect(sx,sy,sW,sH,20);
+    ctx.fillStyle='rgba(242,247,255,.04)';ctx.fill();
+    ctx.strokeStyle=C.line;ctx.lineWidth=1.5;ctx.stroke();
+
+    glow(ctx,sx+50,sy+50,40,s.color+'30');
+    ctx.beginPath();ctx.arc(sx+50,sy+50,24,0,Math.PI*2);
+    ctx.fillStyle=s.color;ctx.fill();
+    txt(ctx,s.n,sx+50,sy+50,{size:22,weight:900,align:'center',color:C.night});
+
+    txt(ctx,s.title,sx+90,sy+50,{size:28,weight:800,color:s.color});
+
+    s.desc.split('\n').forEach((line,li)=>{
+      txt(ctx,line,sx+28,sy+110+li*34,{size:20,weight:500,color:C.muted});
+    });
+
+    if(i<3){
+      const ax=sx+sW+sGap/2;
+      const arrowPulse=.5+Math.sin(t*3+i)*.5;
+      ctx.beginPath();ctx.moveTo(ax-10,sy+sH/2);ctx.lineTo(ax+10,sy+sH/2);
+      ctx.strokeStyle=`rgba(242,247,255,${arrowPulse*.4})`;ctx.lineWidth=3;ctx.stroke();
+      ctx.beginPath();ctx.moveTo(ax+4,sy+sH/2-6);ctx.lineTo(ax+12,sy+sH/2);ctx.lineTo(ax+4,sy+sH/2+6);
+      ctx.strokeStyle=`rgba(242,247,255,${arrowPulse*.4})`;ctx.lineWidth=2;ctx.stroke();
+    }
+    ctx.restore();
+  });
+
+  const params=['Population: 30','Memeplex: 5','Local Iter: 5','Max Iter: 50','Fitness = makespan + 0.001 x std'];
+  const pa=seg(t,1.2,.5,easeOut);
+  let px=64;
+  params.forEach(p=>{
+    ctx.save();ctx.globalAlpha=pa;
+    ctx.font="bold 20px 'JetBrains Mono',monospace";
+    const pw=ctx.measureText(p).width+30;
+    ctx.beginPath();ctx.roundRect(px,600,pw,44,10);
+    ctx.fillStyle='rgba(95,224,210,.08)';ctx.fill();
+    ctx.strokeStyle=C.toscaL+'40';ctx.lineWidth=1;ctx.stroke();
+    txt(ctx,p,px+15,600+22,{size:20,weight:600,mono:true,color:C.toscaL,alpha:1});
+    ctx.restore();
+    px+=pw+12;
+  });
+
+  const frogA=seg(t,.8,.6,easeOut);
+  if(frogA>0){
+    ctx.save();ctx.globalAlpha=frogA;
+    for(let i=0;i<8;i++){
+      const fx=200+i*200+Math.sin(t*2+i)*15;
+      const fy=850+Math.sin(t*3+i*.7)*10;
+      const lift=Math.abs(Math.sin(t*2.5+i*.9))*15;
+      drawFrog(ctx,fx,fy,22,VM_C[i%4],lift);
+    }
+    ctx.restore();
+  }
+});
+
+// ─── Slide 4: 3 Leap Strategies (animated) ───────────
+defSlide('leap','SFLA',(ctx,{t,w,h})=>{
+  fillBg(ctx,w,h,['#03132b','#081d3a','#03132b']);
+
+  const a0=seg(t,0,.5,easeOut);
+  txt(ctx,'Mekanisme Inti',64,55,{size:28,weight:700,color:C.toscaL,alpha:a0});
+  txt(ctx,'3 Strategi Lompatan Katak',64,125,{size:60,weight:900,alpha:a0});
+
+  const strats=[
+    {n:'1',title:'Lompat ke Xb',desc:'Xw + r x 1.6 x (Xb - Xw)\nMenuju terbaik memeplex',color:C.toscaL},
+    {n:'2',title:'Lompat ke Xg',desc:'Xw + r x 1.6 x (Xg - Xw)\nMenuju terbaik global',color:C.gold},
+    {n:'3',title:'Random Reset',desc:'Posisi acak baru\nEksplorasi ruang solusi',color:C.coral}
+  ];
+  strats.forEach((s,i)=>{
+    const a=seg(t,.3+i*.2,.6,easeOut);
+    const cy=220+i*175;
+    ctx.save();ctx.globalAlpha=a;ctx.translate((1-a)*-40,0);
+
+    ctx.beginPath();ctx.roundRect(50,cy,580,155,18);
+    ctx.fillStyle='rgba(242,247,255,.04)';ctx.fill();
+    ctx.strokeStyle=s.color+'40';ctx.lineWidth=1.5;ctx.stroke();
+
+    ctx.beginPath();ctx.arc(90,cy+40,22,0,Math.PI*2);
+    ctx.fillStyle=s.color;ctx.fill();
+    txt(ctx,s.n,90,cy+40,{size:18,weight:900,align:'center',color:C.night});
+    txt(ctx,s.title,130,cy+40,{size:26,weight:800,color:s.color});
+    s.desc.split('\n').forEach((l,li)=>{
+      txt(ctx,l,80,cy+82+li*30,{size:18,weight:500,color:C.muted});
+    });
+    ctx.restore();
+  });
+
+  const rightX=700,rightW=1160,rightH=800,rightY=180;
+  ctx.save();
+  ctx.beginPath();ctx.roundRect(rightX,rightY,rightW,rightH,24);
+  ctx.fillStyle='rgba(242,247,255,.02)';ctx.fill();
+  ctx.strokeStyle=C.line;ctx.lineWidth=1;ctx.stroke();
+
+  ctx.strokeStyle='rgba(242,247,255,.04)';ctx.lineWidth=1;
+  for(let x=rightX;x<=rightX+rightW;x+=60){ctx.beginPath();ctx.moveTo(x,rightY);ctx.lineTo(x,rightY+rightH);ctx.stroke()}
+  for(let y=rightY;y<=rightY+rightH;y+=60){ctx.beginPath();ctx.moveTo(rightX,y);ctx.lineTo(rightX+rightW,y);ctx.stroke()}
+
+  const xwPos={x:rightX+250,y:rightY+600};
+  const xbPos={x:rightX+700,y:rightY+200};
+  const xgPos={x:rightX+900,y:rightY+120};
+  const randPos={x:rightX+500,y:rightY+400};
+
+  const cycle=t%7.5;
+  let frogX=xwPos.x,frogY=xwPos.y;
+  let phase=0,phaseT=0;
+
+  if(cycle<2.5){phase=0;phaseT=cycle/2;}
+  else if(cycle<5){phase=1;phaseT=(cycle-2.5)/2;}
+  else{phase=2;phaseT=(cycle-5)/2;}
+  phaseT=clamp(phaseT,0,1);
+  const eased=easeInOut(phaseT);
+
+  const targets=[xbPos,xgPos,randPos];
+  const target=targets[phase];
+  frogX=lerp(xwPos.x,xwPos.x+(target.x-xwPos.x)*.65,eased);
+  frogY=lerp(xwPos.y,xwPos.y+(target.y-xwPos.y)*.65,eased)-Math.sin(eased*Math.PI)*80;
+
+  const trailColors=[C.toscaL+'60',C.gold+'60',C.coral+'60'];
+  ctx.beginPath();ctx.moveTo(xwPos.x,xwPos.y);
+  const cpX=(xwPos.x+frogX)/2,cpY=Math.min(xwPos.y,frogY+Math.sin(eased*Math.PI)*80)-60;
+  ctx.quadraticCurveTo(cpX,cpY,frogX,frogY+Math.sin(eased*Math.PI)*80);
+  ctx.strokeStyle=trailColors[phase];ctx.lineWidth=3;ctx.setLineDash([12,8]);ctx.stroke();ctx.setLineDash([]);
+
+  ctx.beginPath();ctx.arc(xwPos.x,xwPos.y,8,0,Math.PI*2);
+  ctx.fillStyle=C.coral+'50';ctx.fill();
+  txt(ctx,'Xw (awal)',xwPos.x,xwPos.y+30,{size:18,weight:700,align:'center',color:C.coral});
+
+  glow(ctx,xbPos.x,xbPos.y,50,C.toscaL+'20');
+  ctx.beginPath();ctx.arc(xbPos.x,xbPos.y,16,0,Math.PI*2);
+  ctx.fillStyle=C.toscaL;ctx.fill();
+  txt(ctx,'Xb',xbPos.x,xbPos.y-28,{size:20,weight:800,align:'center',color:C.toscaL});
+  txt(ctx,'Terbaik Memeplex',xbPos.x,xbPos.y+30,{size:14,weight:600,align:'center',color:C.muted});
+
+  glow(ctx,xgPos.x,xgPos.y,60,C.gold+'20');
+  ctx.beginPath();ctx.arc(xgPos.x,xgPos.y,18,0,Math.PI*2);
+  ctx.fillStyle=C.gold;ctx.fill();
+  txt(ctx,'Xg',xgPos.x,xgPos.y-30,{size:20,weight:800,align:'center',color:C.gold});
+  txt(ctx,'Terbaik Global',xgPos.x,xgPos.y+32,{size:14,weight:600,align:'center',color:C.muted});
+
+  if(phase===2){
+    ctx.beginPath();ctx.arc(randPos.x,randPos.y,12,0,Math.PI*2);
+    ctx.fillStyle=C.coral+'60';ctx.fill();
+    txt(ctx,'?',randPos.x,randPos.y,{size:18,weight:800,align:'center',color:C.coral});
+    txt(ctx,'Random',randPos.x,randPos.y+28,{size:14,weight:600,align:'center',color:C.muted});
+  }
+
+  drawFrog(ctx,frogX,frogY,30,C.coral,Math.sin(eased*Math.PI)*10);
+
+  const labels=['Percobaan 1: Lompat ke Xb (terbaik memeplex)','Percobaan 2: Lompat ke Xg (terbaik global)','Percobaan 3: Random Reset'];
+  const labelColors=[C.toscaL,C.gold,C.coral];
+  txt(ctx,labels[phase],rightX+rightW/2,rightY+rightH-30,{size:22,weight:700,align:'center',color:labelColors[phase]});
+
+  ctx.restore();
+});
+
+// ─── Slide 5: Representasi Solusi ─────────────────────
+defSlide('representasi','SFLA',(ctx,{t,w,h})=>{
+  fillBg(ctx,w,h,['#03132b','#07244a','#03132b']);
+
+  const a0=seg(t,0,.5,easeOut);
+  txt(ctx,'Representasi Solusi',64,55,{size:28,weight:700,color:C.toscaL,alpha:a0});
+  txt(ctx,'Satu Katak = Satu Jadwal Lengkap',64,125,{size:60,weight:900,alpha:a0});
+
+  const vals=[1.72,0.34,3.11,2.51,0.87,1.23,2.95,3.60];
+  const vmIdx=vals.map(v=>Math.floor(v));
+  const CW=190,CG=12;
+  const CX0=(w-8*CW-7*CG)/2;
+  const ROW1=260,ROW2=400;
+
+  vals.forEach((v,i)=>{
+    const a=seg(t,.2+i*.08,.5,easeOut);
+    const cx=CX0+i*(CW+CG);
+    ctx.save();ctx.globalAlpha=a;
+
+    txt(ctx,`T${i}`,cx+CW/2,ROW1-30,{size:20,weight:700,mono:true,align:'center',color:C.muted});
+
+    ctx.beginPath();ctx.roundRect(cx,ROW1,CW,70,12);
+    ctx.fillStyle='rgba(242,247,255,.06)';ctx.fill();
+    ctx.strokeStyle=C.line;ctx.lineWidth=1;ctx.stroke();
+    txt(ctx,v.toFixed(2),cx+CW/2,ROW1+35,{size:32,weight:700,mono:true,align:'center'});
+
+    const ma=seg(t,.8+i*.08,.4,easeOut);
+    if(ma>0){
+      ctx.save();ctx.globalAlpha=ma;
+      ctx.beginPath();ctx.moveTo(cx+CW/2,ROW1+75);ctx.lineTo(cx+CW/2,ROW2-5);
+      ctx.strokeStyle=VM_C[vmIdx[i]];ctx.lineWidth=3;ctx.stroke();
+      ctx.beginPath();ctx.moveTo(cx+CW/2-6,ROW2-10);ctx.lineTo(cx+CW/2+6,ROW2-10);ctx.lineTo(cx+CW/2,ROW2);ctx.closePath();
+      ctx.fillStyle=VM_C[vmIdx[i]];ctx.fill();
+      ctx.restore();
+    }
+
+    const vma=seg(t,1+i*.08,.4,easeOut);
+    if(vma>0){
+      ctx.save();ctx.globalAlpha=vma;
+      ctx.beginPath();ctx.roundRect(cx,ROW2,CW,60,12);
+      ctx.fillStyle=VM_C[vmIdx[i]];ctx.fill();
+      txt(ctx,`VM-${vmIdx[i]}`,cx+CW/2,ROW2+30,{size:26,weight:900,mono:true,align:'center',color:C.night});
+      ctx.restore();
+    }
+    ctx.restore();
+  });
+
+  const fa=seg(t,.9,.5,easeOut);
+  pill(ctx,'VM = floor(value)',960,ROW2+100,{size:28,fill:C.toscaL,alpha:fa});
+
+  const ffa=seg(t,1.6,.6,easeOut);
+  if(ffa>0){
+    ctx.save();ctx.globalAlpha=ffa;
+    ctx.beginPath();ctx.roundRect(120,560,1680,180,22);
+    ctx.fillStyle='rgba(95,224,210,.06)';ctx.fill();
+    ctx.strokeStyle=C.toscaL+'40';ctx.lineWidth=2;ctx.stroke();
+
+    txt(ctx,'Fungsi Fitness',160,600,{size:26,weight:800,color:C.toscaL});
+    txt(ctx,'fitness = makespan + 0.001 x std(beban VM)',160,650,{size:36,weight:800,mono:true});
+    txt(ctx,'Makespan = max(waktu_selesai semua VM)  ·  Penalti kecil keseimbangan beban sebagai tiebreaker',160,700,{size:20,weight:500,color:C.muted});
+    ctx.restore();
+  }
+
+  const la=seg(t,2,.8,easeOut);
+  if(la>0){
+    ctx.save();ctx.globalAlpha=la;
+    const lY=780,lH=50,lW=1600,lX=160;
+    for(let v=0;v<4;v++){
+      const ly=lY+v*(lH+10);
+      txt(ctx,`VM-${v}`,lX-20,ly+lH/2,{size:18,weight:800,align:'right',color:VM_C[v]});
+      ctx.beginPath();ctx.roundRect(lX,ly,lW,lH,8);
+      ctx.fillStyle='rgba(242,247,255,.03)';ctx.fill();
+    }
+    const blockAssign=[[1,4],[0,5],[3,6],[2,7]];
+    blockAssign.forEach((tasks,v)=>{
+      let offX=0;
+      tasks.forEach(ti=>{
+        const bw=vals[ti]*80+60;
+        const bx=lX+offX;
+        const by=lY+v*(lH+10);
+        ctx.beginPath();ctx.roundRect(bx,by,bw*la,lH,6);
+        ctx.fillStyle=VM_C[v];ctx.fill();
+        if(bw*la>40)txt(ctx,`T${ti}`,bx+bw*la/2,by+lH/2,{size:16,weight:800,mono:true,align:'center',color:C.night});
+        offX+=bw;
+      });
+    });
+    ctx.restore();
+  }
+});
+
+// ─── Slide 6: Implementasi Kode ──────────────────────
+defSlide('implementasi','Kode',(ctx,{t,w,h})=>{
+  fillBg(ctx,w,h,['#03132b','#081d3a','#03132b']);
+
+  const a0=seg(t,0,.5,easeOut);
+  txt(ctx,'Implementasi Java',64,55,{size:28,weight:700,color:C.toscaL,alpha:a0});
+  txt(ctx,'3 File Utama di CloudSim 7.0.1',64,125,{size:64,weight:900,alpha:a0});
+
+  const files=[
+    {name:'SFLAScheduler.java',desc:'Algoritma SFLA murni\nTerima MI[] & MIPS[]\nReturn pemetaan optimal',
+     methods:['run()','evaluateFitness()','evolveMemeplex()','computeLeap()'],color:C.toscaL,icon:'A'},
+    {name:'SFLADatacenterBroker.java',desc:'Extends DatacenterBroker\nOverride submitCloudlets()\nJalankan SFLA sebelum submit',
+     methods:['submitCloudlets()','setSFLAParameters()','getSflaAssignment()'],color:C.gold,icon:'B'},
+    {name:'SFLACloudSimSimulation.java',desc:'Main class simulasi\nJalankan SFLA & Round-Robin\nCetak tabel perbandingan',
+     methods:['runSFLASimulation()','runRoundRobinSimulation()','printComparison()'],color:C.sky,icon:'M'}
+  ];
+
+  files.forEach((f,i)=>{
+    const a=seg(t,.3+i*.2,.7,easeOut);
+    const fx=64+i*620,fy=230,fw=580,fh=450;
+    ctx.save();ctx.globalAlpha=a;ctx.translate(0,(1-a)*30);
+
+    ctx.beginPath();ctx.roundRect(fx,fy,fw,fh,22);
+    ctx.fillStyle='rgba(242,247,255,.04)';ctx.fill();
+    ctx.strokeStyle=f.color+'50';ctx.lineWidth=2;ctx.stroke();
+
+    // Top accent bar
+    ctx.beginPath();ctx.moveTo(fx+22,fy);ctx.lineTo(fx+fw-22,fy);ctx.lineTo(fx+fw-22,fy+5);ctx.lineTo(fx+22,fy+5);ctx.closePath();
+    ctx.fillStyle=f.color;ctx.fill();
+
+    ctx.beginPath();ctx.arc(fx+45,fy+50,22,0,Math.PI*2);ctx.fillStyle=f.color+'30';ctx.fill();
+    txt(ctx,f.icon,fx+45,fy+50,{size:20,weight:900,align:'center',color:f.color});
+    txt(ctx,f.name,fx+80,fy+50,{size:24,weight:800,color:f.color});
+
+    f.desc.split('\n').forEach((l,li)=>{
+      txt(ctx,l,fx+30,fy+100+li*32,{size:20,weight:500,color:C.muted});
+    });
+
+    txt(ctx,'Methods:',fx+30,fy+220,{size:18,weight:700,color:f.color});
+    f.methods.forEach((m,mi)=>{
+      const my=fy+255+mi*36;
+      ctx.beginPath();ctx.roundRect(fx+30,my-14,fw-60,32,8);
+      ctx.fillStyle='rgba(242,247,255,.03)';ctx.fill();
+      txt(ctx,m,fx+46,my,{size:18,weight:600,mono:true,color:C.ink});
+    });
+    ctx.restore();
+  });
+
+  const ra=seg(t,1.2,.5,easeOut);
+  ctx.save();ctx.globalAlpha=ra;
+  ctx.beginPath();ctx.roundRect(64,720,1792,70,16);
+  ctx.fillStyle='rgba(242,247,255,.04)';ctx.fill();
+  ctx.strokeStyle=C.line;ctx.lineWidth=1;ctx.stroke();
+  txt(ctx,'$',90,755,{size:24,weight:800,mono:true,color:C.toscaL});
+  txt(ctx,'cd cloudsim-sfla-simulation  &&  mvn compile  &&  mvn exec:java',120,755,{size:22,weight:600,mono:true,color:C.muted});
+  ctx.restore();
+});
+
+// ─── Slide 7: Task Assignment ────────────────────────
+defSlide('assignment','Hasil',(ctx,{t,w,h})=>{
+  fillBg(ctx,w,h,['#03132b','#07244a','#03132b']);
+
+  const a0=seg(t,0,.5,easeOut);
+  txt(ctx,'Hasil Simulasi',64,55,{size:28,weight:700,color:C.toscaL,alpha:a0});
+  txt(ctx,'SFLA Task Assignment',64,125,{size:64,weight:900,alpha:a0});
+  txt(ctx,'Tugas besar -> VM cepat  ·  Tugas kecil -> VM lambat',64,195,{size:28,weight:500,color:C.muted,alpha:a0});
+
+  const data=[
+    [0,2439,2],[1,5770,2],[2,6007,3],[3,3790,1],[4,4489,3],[5,3838,3],[6,5293,0],[7,3156,0],
+    [8,3914,3],[9,2828,1],[10,4159,1],[11,3469,1],[12,6071,2],[13,3130,3],[14,1634,0],[15,3874,2]
+  ];
+
+  const cols=['Cloudlet','MI','VM','MIPS','Cloudlet','MI','VM','MIPS'];
+  const tX=64,tW=1792,colW=tW/8;
+
+  const ha=seg(t,.2,.4,easeOut);
+  cols.forEach((c,i)=>{
+    txt(ctx,c,tX+i*colW+colW/2,260,{size:18,weight:700,align:'center',color:C.muted,alpha:ha});
+  });
+
+  ctx.save();ctx.globalAlpha=ha;
+  ctx.beginPath();ctx.moveTo(tX,280);ctx.lineTo(tX+tW,280);
+  ctx.strokeStyle=C.line;ctx.lineWidth=1;ctx.stroke();
+  ctx.restore();
+
+  data.forEach((d,i)=>{
+    const col=i<8?0:4;
+    const row=i<8?i:i-8;
+    const ra=seg(t,.3+i*.05,.4,easeOut);
+    const ry=300+row*60;
+    const rx=tX+col*colW;
+
+    ctx.save();ctx.globalAlpha=ra;
+
+    if(row%2===0){
+      ctx.beginPath();ctx.roundRect(rx,ry-22,colW*4,50,8);
+      ctx.fillStyle='rgba(242,247,255,.02)';ctx.fill();
+    }
+
+    txt(ctx,`#${d[0]}`,rx+colW/2,ry,{size:20,weight:700,mono:true,align:'center'});
+    txt(ctx,`${d[1]}`,rx+colW+colW/2,ry,{size:20,weight:600,mono:true,align:'center'});
+
+    const vmX=rx+colW*2+colW/2,vmW=80;
+    ctx.beginPath();ctx.roundRect(vmX-vmW/2,ry-16,vmW,32,8);
+    ctx.fillStyle=VM_C[d[2]];ctx.fill();
+    txt(ctx,`VM-${d[2]}`,vmX,ry,{size:18,weight:900,mono:true,align:'center',color:C.night});
+
+    txt(ctx,`${VM_MIPS[d[2]]}`,rx+colW*3+colW/2,ry,{size:20,weight:600,mono:true,align:'center',color:C.muted});
+
+    ctx.restore();
+  });
+
+  const ia=seg(t,1.5,.6,easeOut);
+  ctx.save();ctx.globalAlpha=ia;
+  ctx.beginPath();ctx.roundRect(64,800,1792,100,18);
+  ctx.fillStyle='rgba(253,187,22,.05)';ctx.fill();
+  ctx.strokeStyle=C.gold+'40';ctx.lineWidth=1.5;ctx.stroke();
+  txt(ctx,'VM-3 (1750 MIPS) mendapat 5 cloudlet termasuk yang besar, VM-0 (850 MIPS) hanya 3 cloudlet kecil',130,840,{size:22,weight:600,color:C.gold});
+  txt(ctx,'Semua VM selesai hampir bersamaan (11.86s ~ 12.52s) sehingga makespan minimal',130,870,{size:20,weight:500,color:C.muted});
+  ctx.restore();
+});
+
+// ─── Slide 8: Load Balancing (animated bars) ─────────
+defSlide('load','Hasil',(ctx,{t,w,h})=>{
+  fillBg(ctx,w,h,['#03132b','#081d3a','#03132b']);
+
+  const a0=seg(t,0,.5,easeOut);
+  txt(ctx,'Distribusi Beban per VM',64,55,{size:28,weight:700,color:C.toscaL,alpha:a0});
+  txt(ctx,'SFLA vs Round-Robin',64,125,{size:64,weight:900,alpha:a0});
+
+  const sflaLoads=[11.86,12.39,12.52,12.31];
+  const rrLoads=[21.44,15.31,11.80,8.28];
+  const maxLoad=23;
+
+  function drawPanel(px,py,pw,ph,title,color,loads,panelDelay){
+    const pa=seg(t,panelDelay,.6,easeOut);
+    ctx.save();ctx.globalAlpha=pa;
+    ctx.beginPath();ctx.roundRect(px,py,pw,ph,22);
+    ctx.fillStyle='rgba(242,247,255,.04)';ctx.fill();
+    ctx.strokeStyle=color+'60';ctx.lineWidth=2;ctx.stroke();
+
+    txt(ctx,title,px+30,py+40,{size:28,weight:800,color});
+
+    const ms=Math.max(...loads);
+    txt(ctx,`Makespan: ${ms.toFixed(2)}s`,px+pw-30,py+40,{size:22,weight:700,mono:true,align:'right',color:C.gold});
+
+    loads.forEach((load,v)=>{
+      const by=py+90+v*100,bh=60,barMax=pw-220;
+      txt(ctx,`VM-${v}`,px+30,by+bh/2,{size:20,weight:800,color:VM_C[v]});
+      txt(ctx,`${VM_MIPS[v]}`,px+90,by+bh/2,{size:16,weight:600,mono:true,color:C.muted});
+
+      ctx.beginPath();ctx.roundRect(px+160,by,barMax,bh,10);
+      ctx.fillStyle='rgba(242,247,255,.04)';ctx.fill();
+
+      const grow=seg(t,panelDelay+.3+v*.15,1,easeOut);
+      const bw=(load/maxLoad)*barMax*grow;
+      if(bw>2){
+        const gradient=ctx.createLinearGradient(px+160,0,px+160+bw,0);
+        gradient.addColorStop(0,VM_C[v]);gradient.addColorStop(1,VM_C[v]+'aa');
+        ctx.beginPath();ctx.roundRect(px+160,by,bw,bh,10);
+        ctx.fillStyle=gradient;ctx.fill();
+        glow(ctx,px+160+bw,by+bh/2,30,VM_C[v]+'30');
+      }
+
+      txt(ctx,`${(load*grow).toFixed(2)}s`,px+160+bw+14,by+bh/2,{size:20,weight:800,mono:true,color:VM_C[v]});
+    });
+
+    const mlA=seg(t,panelDelay+1,.5,easeOut);
+    if(mlA>0){
+      const mlX=px+160+(ms/maxLoad)*(pw-220);
+      ctx.save();ctx.globalAlpha=mlA;
+      ctx.beginPath();ctx.moveTo(mlX,py+80);ctx.lineTo(mlX,py+ph-20);
+      ctx.strokeStyle=C.danger;ctx.lineWidth=3;ctx.setLineDash([10,6]);ctx.stroke();ctx.setLineDash([]);
+      pill(ctx,`${ms.toFixed(2)}s`,mlX,py+ph-10,{size:18,fill:C.danger,alpha:1});
+      ctx.restore();
+    }
+
+    ctx.restore();
+  }
+
+  drawPanel(40,200,900,540,'SFLA Scheduling',C.toscaL,sflaLoads,.3);
+  drawPanel(980,200,900,540,'Round-Robin',C.coral,rrLoads,.6);
+
+  const ia=seg(t,2,.5,easeOut);
+  txt(ctx,'SFLA: semua VM selesai ~12s (seimbang)',480,800,{size:24,weight:700,align:'center',color:C.toscaL,alpha:ia});
+  txt(ctx,'Round-Robin: VM-0 = 21.4s, VM-3 = 8.3s (tidak seimbang)',1430,800,{size:24,weight:700,align:'center',color:C.coral,alpha:ia});
+});
+
+// ─── Slide 9: Convergence ────────────────────────────
+defSlide('konvergensi','Hasil',(ctx,{t,w,h})=>{
+  fillBg(ctx,w,h,['#03132b','#071f42','#03132b']);
+
+  const a0=seg(t,0,.5,easeOut);
+  txt(ctx,'Konvergensi SFLA',64,55,{size:28,weight:700,color:C.toscaL,alpha:a0});
+  txt(ctx,'Best Fitness per Iterasi',64,125,{size:64,weight:900,alpha:a0});
+
+  const data=[[1,14.54],[5,13.05],[10,12.82],[15,12.82],[20,12.82],[25,12.82],[30,12.61],[35,12.61],[40,12.61],[45,12.52],[50,12.52]];
+  const pad={l:140,r:80,t:220,b:120};
+  const pw=w-pad.l-pad.r,ph=h-pad.t-pad.b;
+  const minF=12.0,maxF=15.0;
+
+  const ga=seg(t,.3,.5,easeOut);
+  ctx.save();ctx.globalAlpha=ga;
+  for(let i=0;i<=6;i++){
+    const y=pad.t+ph*(i/6);
+    const val=maxF-(maxF-minF)*(i/6);
+    ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(pad.l+pw,y);
+    ctx.strokeStyle='rgba(242,247,255,.06)';ctx.lineWidth=1;ctx.stroke();
+    txt(ctx,val.toFixed(1),pad.l-16,y,{size:16,weight:600,mono:true,align:'right',color:C.muted});
+  }
+  for(let i=0;i<=10;i++){
+    const x=pad.l+pw*(i/10);
+    ctx.beginPath();ctx.moveTo(x,pad.t);ctx.lineTo(x,pad.t+ph);
+    ctx.strokeStyle='rgba(242,247,255,.04)';ctx.lineWidth=1;ctx.stroke();
+    txt(ctx,String(i*5),x,pad.t+ph+24,{size:16,weight:600,mono:true,align:'center',color:C.muted});
+  }
+  txt(ctx,'Iterasi',pad.l+pw/2,h-40,{size:20,weight:700,align:'center',color:C.muted});
+  ctx.restore();
+
+  const lineA=seg(t,.5,2,easeOut);
+  const pointsToDraw=Math.floor(lineA*data.length);
+
+  if(pointsToDraw>1){
+    ctx.save();
+    ctx.beginPath();
+    for(let i=0;i<=pointsToDraw&&i<data.length;i++){
+      const x=pad.l+(data[i][0]/50)*pw;
+      const y=pad.t+(1-(data[i][1]-minF)/(maxF-minF))*ph;
+      if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+    }
+    const lastX=pad.l+(data[Math.min(pointsToDraw,data.length-1)][0]/50)*pw;
+    ctx.lineTo(lastX,pad.t+ph);ctx.lineTo(pad.l+(data[0][0]/50)*pw,pad.t+ph);ctx.closePath();
+    const grad=ctx.createLinearGradient(0,pad.t,0,pad.t+ph);
+    grad.addColorStop(0,C.toscaL+'25');grad.addColorStop(1,C.toscaL+'02');
+    ctx.fillStyle=grad;ctx.fill();
+    ctx.restore();
+  }
+
+  if(pointsToDraw>0){
+    ctx.beginPath();
+    for(let i=0;i<=pointsToDraw&&i<data.length;i++){
+      const x=pad.l+(data[i][0]/50)*pw;
+      const y=pad.t+(1-(data[i][1]-minF)/(maxF-minF))*ph;
+      if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+    }
+    ctx.strokeStyle=C.toscaL;ctx.lineWidth=4;ctx.stroke();
+
+    for(let i=0;i<=pointsToDraw&&i<data.length;i++){
+      const x=pad.l+(data[i][0]/50)*pw;
+      const y=pad.t+(1-(data[i][1]-minF)/(maxF-minF))*ph;
+      glow(ctx,x,y,20,C.toscaL+'30');
+      ctx.beginPath();ctx.arc(x,y,6,0,Math.PI*2);ctx.fillStyle=C.toscaL;ctx.fill();
+      ctx.beginPath();ctx.arc(x,y,3,0,Math.PI*2);ctx.fillStyle='#fff';ctx.fill();
+
+      if(i===0||i===data.length-1){
+        txt(ctx,data[i][1].toFixed(2),x,y-22,{size:18,weight:800,mono:true,align:'center',color:C.ink});
+      }
+    }
+  }
+
+  const ca=seg(t,2,.5,easeOut);
+  if(ca>0){
+    const cx=pad.l+(45/50)*pw,cy=pad.t+(1-(12.52-minF)/(maxF-minF))*ph;
+    ctx.save();ctx.globalAlpha=ca;
+    ctx.beginPath();ctx.arc(cx,cy,14+Math.sin(t*4)*3,0,Math.PI*2);
+    ctx.strokeStyle=C.gold;ctx.lineWidth=3;ctx.stroke();
+    txt(ctx,'Konvergen: 12.52 (iterasi 45)',cx+24,cy,{size:20,weight:700,color:C.gold});
+    ctx.restore();
+  }
+
+  const sa=seg(t,.8,.4,easeOut);
+  if(sa>0){
+    const sx=pad.l+(1/50)*pw,sy=pad.t+(1-(14.54-minF)/(maxF-minF))*ph;
+    txt(ctx,'Start: 14.54',sx+16,sy-18,{size:16,weight:700,color:C.muted,alpha:sa});
+  }
+});
+
+// ─── Slide 10: Comparison Table ──────────────────────
+defSlide('perbandingan','Hasil',(ctx,{t,w,h})=>{
+  fillBg(ctx,w,h,['#03132b','#081d3a','#03132b']);
+
+  const a0=seg(t,0,.5,easeOut);
+  txt(ctx,'Perbandingan Hasil',64,55,{size:28,weight:700,color:C.toscaL,alpha:a0});
+  txt(ctx,'SFLA vs Round-Robin',64,125,{size:72,weight:900,alpha:a0});
+
+  const rows=[
+    {label:'Makespan',sfla:'12.53 dtk',rr:'21.44 dtk',imp:'- 41.53%'},
+    {label:'Avg Completion Time',sfla:'10.50 dtk',rr:'11.57 dtk',imp:'- 9.23%'},
+    {label:'Throughput',sfla:'1.28 task/s',rr:'0.75 task/s',imp:'+ 71.3%'},
+    {label:'Load Imbalance',sfla:'9.82',rr:'14.00',imp:'- 29.8%'},
+    {label:'SFLA Runtime',sfla:'~53 ms',rr:'0 ms',imp:'overhead minimal'}
+  ];
+
+  const tY=240,rH=80,colWidths=[400,350,350,350];
+  const tX=80;
+
+  const ha=seg(t,.2,.4,easeOut);
+  const headers=['Metrik','SFLA','Round-Robin','Perbaikan'];
+  let hx=tX;
+  headers.forEach((h,i)=>{
+    txt(ctx,h,hx+colWidths[i]/2,tY,{size:22,weight:700,align:'center',color:C.muted,alpha:ha});
+    hx+=colWidths[i];
+  });
+
+  ctx.save();ctx.globalAlpha=ha;
+  ctx.beginPath();ctx.moveTo(tX,tY+20);ctx.lineTo(tX+colWidths.reduce((a,b)=>a+b,0),tY+20);
+  ctx.strokeStyle=C.line;ctx.lineWidth=1.5;ctx.stroke();
+  ctx.restore();
+
+  rows.forEach((r,i)=>{
+    const ra=seg(t,.35+i*.15,.5,easeOut);
+    const ry=tY+50+i*rH;
+    ctx.save();ctx.globalAlpha=ra;ctx.translate(0,(1-ra)*20);
+
+    if(i%2===0){
+      ctx.beginPath();ctx.roundRect(tX-10,ry-25,colWidths.reduce((a,b)=>a+b,0)+20,rH-10,12);
+      ctx.fillStyle='rgba(242,247,255,.03)';ctx.fill();
+    }
+
+    let cx=tX;
+    txt(ctx,r.label,cx+20,ry+10,{size:24,weight:700});cx+=colWidths[0];
+    txt(ctx,r.sfla,cx+colWidths[1]/2,ry+10,{size:26,weight:800,mono:true,align:'center',color:C.toscaL});cx+=colWidths[1];
+    txt(ctx,r.rr,cx+colWidths[2]/2,ry+10,{size:26,weight:600,mono:true,align:'center',color:C.muted});cx+=colWidths[2];
+    txt(ctx,r.imp,cx+colWidths[3]/2,ry+10,{size:26,weight:800,mono:true,align:'center',color:i<4?C.gold:C.muted});
+
+    ctx.restore();
+  });
+
+  const hla=seg(t,1,.5,easeOut);
+  if(hla>0){
+    ctx.save();ctx.globalAlpha=hla;
+    const hrY=tY+50-25;
+    ctx.beginPath();ctx.roundRect(tX-15,hrY,colWidths.reduce((a,b)=>a+b,0)+30,rH-10,14);
+    ctx.strokeStyle=C.gold+'50';ctx.lineWidth=2;ctx.stroke();
+    ctx.restore();
+  }
+
+  const ba=seg(t,1.2,.8,easeOut);
+  if(ba>0){
+    ctx.save();ctx.globalAlpha=ba;
+    const barY=700,barH=70,barMax=1200;
+
+    const sflaW=(12.53/21.44)*barMax*seg(t,1.3,.8,easeOut);
+    txt(ctx,'SFLA',tX+20,barY+barH/2,{size:24,weight:800,color:C.toscaL});
+    ctx.beginPath();ctx.roundRect(tX+160,barY,sflaW,barH,14);
+    const sg2=ctx.createLinearGradient(tX+160,0,tX+160+sflaW,0);
+    sg2.addColorStop(0,C.toscaL);sg2.addColorStop(1,C.toscaL+'80');
+    ctx.fillStyle=sg2;ctx.fill();
+    glow(ctx,tX+160+sflaW,barY+barH/2,40,C.toscaL+'30');
+    txt(ctx,'12.53s',tX+160+sflaW+16,barY+barH/2,{size:22,weight:800,mono:true,color:C.toscaL});
+
+    const rrW=barMax*seg(t,1.5,.8,easeOut);
+    const barY2=barY+barH+20;
+    txt(ctx,'R-Robin',tX+20,barY2+barH/2,{size:24,weight:800,color:C.coral});
+    ctx.beginPath();ctx.roundRect(tX+160,barY2,rrW,barH,14);
+    const rg2=ctx.createLinearGradient(tX+160,0,tX+160+rrW,0);
+    rg2.addColorStop(0,C.coral);rg2.addColorStop(1,C.coral+'80');
+    ctx.fillStyle=rg2;ctx.fill();
+    txt(ctx,'21.44s',tX+160+rrW+16,barY2+barH/2,{size:22,weight:800,mono:true,color:C.coral});
+
+    const impA=seg(t,2,.5,easeOut);
+    if(impA>0){
+      pill(ctx,'-41.53% makespan',tX+160+sflaW/2,barY-20,{size:24,fill:C.gold,alpha:impA});
+    }
+    ctx.restore();
+  }
+});
+
+// ─── Slide 11: Kesimpulan ────────────────────────────
+defSlide('kesimpulan','Penutup',(ctx,{t,w,h})=>{
+  fillBg(ctx,w,h,['#03132b','#0a1e3d','#03132b']);
+
+  if(!ctx._cparts){
+    ctx._cparts=[];
+    for(let i=0;i<60;i++)ctx._cparts.push({
+      x:Math.random()*w,y:Math.random()*h,r:Math.random()*2+.5,
+      vx:(Math.random()-.5)*.3,vy:(Math.random()-.5)*.2,a:Math.random()*.3+.1
+    });
+  }
+  ctx._cparts.forEach(p=>{
+    p.x+=p.vx;p.y+=p.vy;if(p.x<0)p.x=w;if(p.x>w)p.x=0;if(p.y<0)p.y=h;if(p.y>h)p.y=0;
+    ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,Math.PI*2);ctx.fillStyle=`rgba(95,224,210,${p.a})`;ctx.fill();
+  });
+
+  const a0=seg(t,0,.5,easeOut);
+  txt(ctx,'Kesimpulan',64,80,{size:30,weight:700,color:C.toscaL,alpha:a0});
+  txt(ctx,'SFLA Unggul dari Round-Robin',64,160,{size:72,weight:900,alpha:a0});
+
+  const stats=[
+    {value:'12.53',unit:'detik',label:'Makespan SFLA',sub:'vs 21.44 detik Round-Robin',color:C.toscaL},
+    {value:'41.5',unit:'%',label:'Perbaikan Makespan',sub:'lebih cepat dari Round-Robin',color:C.gold},
+    {value:'1.28',unit:'task/s',label:'Throughput SFLA',sub:'vs 0.75 task/s Round-Robin',color:C.sky}
+  ];
+
+  stats.forEach((s,i)=>{
+    const a=seg(t,.4+i*.25,.7,easeOut);
+    const cx=64+i*620,cy=280,cw=580,ch=300;
+    ctx.save();ctx.globalAlpha=a;ctx.translate(0,(1-a)*30);
+
+    glow(ctx,cx+cw/2,cy+ch/2,200,s.color+'08');
+    ctx.beginPath();ctx.roundRect(cx,cy,cw,ch,24);
+    ctx.fillStyle='rgba(242,247,255,.04)';ctx.fill();
+    ctx.strokeStyle=s.color+'40';ctx.lineWidth=2;ctx.stroke();
+
+    txt(ctx,s.label,cx+cw/2,cy+45,{size:22,weight:700,align:'center',color:C.muted});
+
+    const countA=seg(t,.6+i*.25,1,easeOut);
+    const numVal=parseFloat(s.value)*countA;
+    txt(ctx,numVal.toFixed(s.value.includes('.')?2:1),cx+cw/2,cy+140,{size:80,weight:900,mono:true,align:'center',color:s.color});
+    txt(ctx,s.unit,cx+cw/2,cy+200,{size:30,weight:700,align:'center',color:C.muted});
+    txt(ctx,s.sub,cx+cw/2,cy+255,{size:20,weight:500,align:'center',color:C.muted});
+
+    ctx.restore();
+  });
+
+  const ea=seg(t,1.6,.6,easeOut);
+  ctx.save();ctx.globalAlpha=ea;
+  ctx.beginPath();ctx.roundRect(64,620,1792,160,20);
+  ctx.fillStyle='rgba(253,187,22,.05)';ctx.fill();
+  ctx.strokeStyle=C.gold+'30';ctx.lineWidth=1.5;ctx.stroke();
+  txt(ctx,'Mengapa SFLA lebih baik?',96,660,{size:26,weight:800,color:C.gold});
+  txt(ctx,'SFLA mempertimbangkan kapasitas MIPS setiap VM saat mengalokasikan tugas.',96,700,{size:22,weight:500,color:C.ink});
+  txt(ctx,'VM cepat mendapat lebih banyak tugas, VM lambat lebih sedikit — semua VM selesai hampir bersamaan.',96,735,{size:22,weight:500,color:C.ink});
+  ctx.restore();
+
+  const fa=seg(t,1,.5,easeOut);
+  if(fa>0){
+    ctx.save();ctx.globalAlpha=fa;
+    for(let i=0;i<5;i++){
+      const fx=1500+i*80+Math.sin(t*2+i)*10;
+      const fy=850+Math.sin(t*3+i*1.2)*15;
+      drawFrog(ctx,fx,fy,20,VM_C[i%4],Math.abs(Math.sin(t*2.5+i))*18);
+    }
+    ctx.restore();
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Slide Engine
+// ═══════════════════════════════════════════════════════════════
+(function(){
+const stageEl=document.getElementById('stage');
+const rail=document.getElementById('rail');
+const counterEl=document.getElementById('counter');
+const wipeEl=document.getElementById('chapter-wipe');
+const total=SLIDES.length;
+let cur=-1,canvases=[],ctxs=[],slideEls=[];
+let startTime=0;
+
+SLIDES.forEach((_,i)=>{
+  const div=document.createElement('div');div.className='slide';
+  div.style.display='none';
+  const cvs=document.createElement('canvas');cvs.className='scene-canvas';
+  div.appendChild(cvs);
+  stageEl.appendChild(div);
+  slideEls.push(div);canvases.push(cvs);ctxs.push(null);
+
+  const dot=document.createElement('button');dot.className='rail-dot';
+  dot.onclick=()=>go(i);
+  rail.appendChild(dot);
+});
+
+function sizeCanvas(i){
+  const c=canvases[i];c.width=1920;c.height=1080;
+  ctxs[i]=c.getContext('2d');
+}
+
+function go(n){
+  if(n<0||n>=total||n===cur)return;
+  const prev=cur;cur=n;startTime=performance.now()/1000;
+
+  if(prev>=0&&SLIDES[prev].chapter!==SLIDES[cur].chapter){
+    wipeEl.textContent=SLIDES[cur].chapter;
+    wipeEl.style.background=getChapterColor(SLIDES[cur].chapter);
+    wipeEl.classList.remove('play');void wipeEl.offsetWidth;
+    wipeEl.classList.add('play');
+  }
+
+  const fwd=prev<cur;
+
+  if(prev>=0){
+    const pel=slideEls[prev];
+    pel.classList.remove('entering-fwd','entering-bwd');
+    pel.classList.add('leaving',fwd?'leaving-fwd':'leaving-bwd');
+    setTimeout(()=>{pel.style.display='none';pel.classList.remove('leaving','leaving-fwd','leaving-bwd')},500);
+  }
+
+  const cel=slideEls[cur];
+  cel.style.display='block';
+  cel.classList.remove('leaving','leaving-fwd','leaving-bwd');
+  cel.classList.add(fwd?'entering-fwd':'entering-bwd');
+  sizeCanvas(cur);
+
+  if(ctxs[cur]){ctxs[cur]._particles=null;ctxs[cur]._cparts=null}
+
+  [...rail.children].forEach((d,i)=>{
+    d.className='rail-dot'+(i===cur?' active':'')+(i<cur?' visited':'');
+  });
+  counterEl.textContent=`${cur+1} / ${total}`;
+}
+
+function getChapterColor(ch){
+  const map={Pembuka:C.toscaL,Arsitektur:C.sky,SFLA:C.toscaL,Kode:C.gold,Hasil:C.coral,Penutup:C.gold};
+  return map[ch]||C.toscaL;
+}
+
+function render(){
+  if(cur>=0&&ctxs[cur]){
+    const now=performance.now()/1000;
+    const ctx=ctxs[cur];
+    ctx.clearRect(0,0,1920,1080);
+    SLIDES[cur].draw(ctx,{t:now,bt:now-startTime,w:1920,h:1080});
+  }
+  requestAnimationFrame(render);
+}
+
+document.getElementById('btn-prev').onclick=()=>go(cur-1);
+document.getElementById('btn-next').onclick=()=>go(cur+1);
+document.addEventListener('keydown',e=>{
+  if(e.key==='ArrowRight'||e.key===' '){e.preventDefault();go(cur+1)}
+  else if(e.key==='ArrowLeft'){e.preventDefault();go(cur-1)}
+});
+
+function resize(){
+  const deck=document.getElementById('deck');
+  const s=Math.min(window.innerWidth/1920,window.innerHeight/1080);
+  deck.style.transform=`translate(-50%,-50%) scale(${s})`;
+}
+window.addEventListener('resize',resize);resize();
+
+go(0);
+requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>
