@@ -1,0 +1,3 @@
+org\cloudbus\cloudsim\sfla\SFLAScheduler.class
+org\cloudbus\cloudsim\sfla\SFLACloudSimSimulation.class
+org\cloudbus\cloudsim\sfla\SFLADatacenterBroker.class
